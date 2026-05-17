@@ -14,6 +14,39 @@ const SECTIONS = [
   { id:"anytime",   label:"Tasks",     color:"#D5F5E3", text:"#1E8449", from:-1, to:-1 },
 ];
 
+// ── GEMINI API ─────────────────────────────────────────────
+const GEMINI_KEY = import.meta.env.VITE_GEMINI_KEY;
+const GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=" + GEMINI_KEY;
+
+async function askGemini(systemPrompt, userMessage) {
+  const res = await fetch(GEMINI_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      systemInstruction: {
+        parts: [{ text: systemPrompt }]
+      },
+      contents: [
+        { role: "user", parts: [{ text: userMessage }] }
+      ],
+      generationConfig: {
+        temperature: 0.3,
+        maxOutputTokens: 1200,
+      }
+    })
+  });
+  const data = await res.json();
+  return data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+}
+
+// ── HELPERS ────────────────────────────────────────────────
+function saveLocal(key, val) {
+  try { localStorage.setItem(key, JSON.stringify(val)); } catch(e) {}
+}
+function loadLocal(key) {
+  try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : null; } catch(e) { return null; }
+}
+
 function fmt(t) {
   if (!t) return "";
   const h = parseInt(t.split(":")[0]);
@@ -59,39 +92,38 @@ function getWeekDays() {
 }
 const WEEKDAYS = getWeekDays();
 
-async function storageGet(key) {
-  try { const r = await window.storage.get(key); return r ? JSON.parse(r.value) : null; } catch(e) { return null; }
-}
-async function storageSet(key, val) {
-  try { await window.storage.set(key, JSON.stringify(val)); } catch(e) {}
-}
-
+// ── APP ────────────────────────────────────────────────────
 export default function App() {
-  const [view, setView]       = useState("today");
+  const [view, setView]         = useState("today");
   const [schedule, setSchedule] = useState({});
   const [special, setSpecial]   = useState({});
   const [comps, setComps]       = useState({});
-  const [msgs, setMsgs]         = useState([{ r:"ai", t:"Assalam o Alaikum! 👋\n\nTell me your daily routine and I will build your planner.\n\nExample: \"I go to school every day from 8am to 1:45pm. Tuition 3pm to 5pm every day.\"\n\nI will sort everything automatically!" }]);
-  const [input, setInput]       = useState("");
-  const [loading, setLoading]   = useState(false);
+  const [msgs, setMsgs]         = useState([{
+    r:"ai",
+    t:"Assalam o Alaikum! 👋\n\nTell me your daily routine and I will build your planner.\n\nExample:\n\"I go to school every day from 8am to 1:45pm. Tuition 3pm to 5pm every day.\"\n\nPowered by Google Gemini (Free) ✨"
+  }]);
+  const [input, setInput]   = useState("");
+  const [loading, setLoading] = useState(false);
+  const [listening, setListening] = useState(false);
   const chatRef = useRef(null);
 
   useEffect(function() {
-    (async function() {
-      const s = await storageGet("sch"); if (s) setSchedule(s);
-      const e = await storageGet("spe"); if (e) setSpecial(e);
-      const c = await storageGet("cmp"); if (c) setComps(c);
-    })();
+    const s = loadLocal("dp_sched"); if (s) setSchedule(s);
+    const e = loadLocal("dp_events"); if (e) setSpecial(e);
+    const c = loadLocal("dp_comps"); if (c) setComps(c);
   }, []);
 
   useEffect(function() {
     if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight;
   }, [msgs, loading]);
 
-  async function save(s, e, c) {
-    if (s !== undefined) { await storageSet("sch", s); }
-    if (e !== undefined) { await storageSet("spe", e); }
-    if (c !== undefined) { await storageSet("cmp", c); }
+  function mark(name, val) {
+    const prev = comps[TODAY_KEY] || {};
+    const next = Object.assign({}, prev);
+    if (val === undefined) { delete next[name]; } else { next[name] = val; }
+    const nc = Object.assign({}, comps, {[TODAY_KEY]: next});
+    setComps(nc);
+    saveLocal("dp_comps", nc);
   }
 
   const todayTasks = [
@@ -101,15 +133,6 @@ export default function App() {
 
   const todayComps = comps[TODAY_KEY] || {};
   const todayDone = todayTasks.filter(function(t) { return todayComps[t.name] === true; }).length;
-
-  async function mark(name, val) {
-    const prev = comps[TODAY_KEY] || {};
-    const next = Object.assign({}, prev);
-    if (val === undefined) { delete next[name]; } else { next[name] = val; }
-    const nc = Object.assign({}, comps, {[TODAY_KEY]: next});
-    setComps(nc);
-    await save(undefined, undefined, nc);
-  }
 
   const allWeekTasks = [];
   const seen = new Set();
@@ -147,32 +170,29 @@ export default function App() {
       return d.toISOString().split("T")[0];
     })();
 
+    const systemPrompt =
+      "You are a daily planner AI. Parse natural language and return ONLY valid JSON with no markdown, no code blocks, no extra text.\n" +
+      "Current schedule: " + JSON.stringify(schedule) + "\n" +
+      "Today: " + TODAY_KEY + " (" + TODAY_DAY + "). Tomorrow: " + tomorrow + ". Next Sunday: " + nextSun + ".\n" +
+      "STRICT RULES:\n" +
+      "- every day for school or tuition or work = monday to saturday ONLY, never sunday\n" +
+      "- every day for habits or prayers or personal = all 7 days including sunday\n" +
+      "- All times must be 24hr HH:MM format\n" +
+      "- Merge tasks by name, update if exists, add if new\n" +
+      "- Always pick best emoji for each task\n" +
+      "Return ONLY this JSON, nothing else:\n" +
+      "{\"message\":\"short friendly reply\",\"schedule\":{\"monday\":[{\"name\":\"School\",\"start\":\"08:00\",\"end\":\"13:45\",\"category\":\"education\",\"emoji\":\"🎒\"}]},\"specialEvent\":{\"date\":\"YYYY-MM-DD\",\"event\":{\"name\":\"Park\",\"start\":\"09:00\",\"end\":null,\"category\":\"other\",\"emoji\":\"🌳\"}}}\n" +
+      "Only include days and fields that are changing. Leave out specialEvent if not needed.";
+
     try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 1200,
-          system: "You are a daily planner AI. Parse natural language and return ONLY valid JSON, no markdown.\n" +
-            "Current schedule: " + JSON.stringify(schedule) + "\n" +
-            "Today: " + TODAY_KEY + " (" + TODAY_DAY + "). Tomorrow: " + tomorrow + ". Next Sunday: " + nextSun + ".\n" +
-            "RULES:\n" +
-            "- every day for school or tuition or work = monday to saturday ONLY\n" +
-            "- every day for habits or prayers = all 7 days\n" +
-            "- Times in 24hr HH:MM format\n" +
-            "- Merge by name, update if exists\n" +
-            "- Pick best emoji\n" +
-            "Return ONLY: {\"message\":\"short reply\",\"schedule\":{\"monday\":[{\"name\":\"School\",\"start\":\"08:00\",\"end\":\"13:45\",\"category\":\"education\",\"emoji\":\"🎒\"}]},\"specialEvent\":{\"date\":\"YYYY-MM-DD\",\"event\":{\"name\":\"Park\",\"start\":\"09:00\",\"end\":null,\"category\":\"other\",\"emoji\":\"🌳\"}}}\n" +
-            "Only include changing days. Omit specialEvent if not needed.",
-          messages: [{role:"user", content:u}]
-        })
-      });
-      const d = await res.json();
-      const txt = (d.content||[]).map(function(i){return i.text||"";}).join("");
+      const txt = await askGemini(systemPrompt, u);
       let p;
-      try { p = JSON.parse(txt.replace(/```json|```/g,"").trim()); }
-      catch(e) { p = { message: "Try: School every day 8am to 1:45pm" }; }
+      try {
+        const clean = txt.replace(/```json|```/g,"").trim();
+        p = JSON.parse(clean);
+      } catch(e) {
+        p = { message: "Try: School every day 8am to 1:45pm" };
+      }
 
       let ns = Object.assign({}, schedule);
       let ne = Object.assign({}, special);
@@ -183,57 +203,56 @@ export default function App() {
           if (!Array.isArray(tasks) || !tasks.length) return;
           const ex = [...(ns[day]||[])];
           tasks.forEach(function(nt) {
-            const i = ex.findIndex(function(t) { return t.name.toLowerCase()===nt.name.toLowerCase(); });
+            const i = ex.findIndex(function(t) { return t.name.toLowerCase() === nt.name.toLowerCase(); });
             if (i >= 0) ex[i] = nt; else ex.push(nt);
           });
-          ns[day] = ex.sort(function(a,b){return (a.start||"zz").localeCompare(b.start||"zz");});
+          ns[day] = ex.sort(function(a,b) { return (a.start||"zz").localeCompare(b.start||"zz"); });
         });
         setSchedule(ns);
+        saveLocal("dp_sched", ns);
       }
+
       if (p.specialEvent && p.specialEvent.date && p.specialEvent.event) {
         const date = p.specialEvent.date;
         const event = p.specialEvent.event;
         const ex = [...(ne[date]||[])];
-        const i = ex.findIndex(function(e){return e.name.toLowerCase()===event.name.toLowerCase();});
-        if (i>=0) ex[i]=event; else ex.push(event);
+        const i = ex.findIndex(function(e) { return e.name.toLowerCase() === event.name.toLowerCase(); });
+        if (i >= 0) ex[i] = event; else ex.push(event);
         ne[date] = ex;
         setSpecial(ne);
+        saveLocal("dp_events", ne);
       }
-      await save(ns, ne, undefined);
-      setMsgs(function(prev){return [...prev,{r:"ai",t:p.message||"Done! Check your Today tab."}];});
+
+      setMsgs(function(prev) { return [...prev, {r:"ai", t: p.message || "Done! Check your Today tab."}]; });
     } catch(e) {
-      setMsgs(function(prev){return [...prev,{r:"ai",t:"Something went wrong. Try again."}];});
+      setMsgs(function(prev) { return [...prev, {r:"ai", t:"Something went wrong. Check your Gemini API key."}]; });
     }
     setLoading(false);
   }
 
-  // STYLES
-  const cream = "#FFFDF7";
-  const gold  = "#FFF8E7";
-  const border= "#E8D8A0";
-  const orange= "#E76F51";
-  const font  = "Nunito,sans-serif";
-
-  function Header({emoji, title, sub, right}) {
-    return (
-      <div style={{background:gold, padding:"52px 20px 18px", borderBottom:"2px solid "+border}}>
-        <div style={{display:"flex", alignItems:"center", gap:10}}>
-          <span style={{fontSize:28}}>{emoji}</span>
-          <div style={{flex:1}}>
-            <div style={{fontFamily:font, fontWeight:900, fontSize:24, color:"#2C2C2C"}}>{title}</div>
-            {sub && <div style={{fontFamily:font, fontSize:12, color:"#AAA", fontWeight:600}}>{sub}</div>}
-          </div>
-          {right}
-        </div>
-      </div>
-    );
+  function voice() {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) { alert("Voice not supported. Use Chrome."); return; }
+    const r = new SR();
+    r.onstart = function() { setListening(true); };
+    r.onend = function() { setListening(false); };
+    r.onresult = function(e) { setInput(e.results[0][0].transcript); };
+    r.start();
   }
 
+  // ── COLORS ─────────────────────────────────────────────────
+  const cream  = "#FFFDF7";
+  const gold   = "#FFF8E7";
+  const border = "#E8D8A0";
+  const orange = "#E76F51";
+  const font   = "Nunito,sans-serif";
+
+  // ── TODAY VIEW ─────────────────────────────────────────────
   function TodayView() {
     const sections = SECTIONS.map(function(sec) {
       const tasks = sec.id === "anytime"
         ? todayTasks.filter(function(t){return !t.start;})
-        : todayTasks.filter(function(t){const h=parseInt(t.start||"-1");return h>=sec.from&&h<sec.to;});
+        : todayTasks.filter(function(t){ const h=parseInt(t.start||"-1"); return h>=sec.from&&h<sec.to; });
       return Object.assign({},sec,{tasks});
     }).filter(function(s){return s.tasks.length>0;});
 
@@ -255,7 +274,7 @@ export default function App() {
           </div>
           {todayTasks.length > 0 && (
             <div style={{marginTop:12, height:7, background:"#EEE5C0", borderRadius:10}}>
-              <div style={{height:"100%", background:"linear-gradient(90deg,#F4A261,"+orange+")", borderRadius:10, width:(todayDone/todayTasks.length*100)+"%", transition:"width 0.5s"}} />
+              <div style={{height:"100%", background:"linear-gradient(90deg,#F4A261,"+orange+")", borderRadius:10, width:(todayDone/todayTasks.length*100)+"%", transition:"width 0.5s"}}/>
             </div>
           )}
         </div>
@@ -264,7 +283,7 @@ export default function App() {
           <div style={{textAlign:"center", padding:"80px 24px"}}>
             <div style={{fontSize:56, marginBottom:16}}>📋</div>
             <div style={{fontFamily:font, fontWeight:800, fontSize:18, color:"#2C2C2C", marginBottom:8}}>Your planner is empty!</div>
-            <div style={{fontFamily:font, fontSize:13, color:"#AAA", marginBottom:24, lineHeight:1.7}}>Go to Chat tab and tell me your daily routine</div>
+            <div style={{fontFamily:font, fontSize:13, color:"#AAA", marginBottom:24, lineHeight:1.7}}>Go to Chat and tell me your daily routine</div>
             <button onClick={function(){setView("chat");}} style={{padding:"12px 28px", background:orange, color:"#fff", border:"none", borderRadius:14, cursor:"pointer", fontFamily:font, fontWeight:800, fontSize:14}}>Open Chat</button>
           </div>
         ) : (
@@ -287,20 +306,20 @@ export default function App() {
                     return (
                       <div key={i} style={{display:"grid", gridTemplateColumns:"36px 78px 1fr", marginBottom:7, alignItems:"center"}}>
                         <div onClick={function(){mark(task.name, done?undefined:true);}}
-                          style={{width:28,height:28,borderRadius:7,border:"2.5px solid "+(done?orange:border),background:done?orange:gold,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto",transition:"all 0.2s"}}>
-                          {done && <span style={{color:"#fff",fontSize:16,fontWeight:900}}>✓</span>}
+                          style={{width:28, height:28, borderRadius:7, border:"2.5px solid "+(done?orange:border), background:done?orange:gold, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", margin:"0 auto", transition:"all 0.2s"}}>
+                          {done && <span style={{color:"#fff", fontSize:16, fontWeight:900}}>✓</span>}
                         </div>
-                        <div style={{background:gold,border:"1.5px solid "+border,borderRadius:9,padding:"7px 4px",marginRight:6,textAlign:"center",fontFamily:font,fontWeight:800,fontSize:10,color:done?"#CCC":"#555",textDecoration:done?"line-through":"none"}}>
+                        <div style={{background:gold, border:"1.5px solid "+border, borderRadius:9, padding:"7px 4px", marginRight:6, textAlign:"center", fontFamily:font, fontWeight:800, fontSize:10, color:done?"#CCC":"#555", textDecoration:done?"line-through":"none"}}>
                           {task.start ? fmt(task.start) : "Any"}
                         </div>
-                        <div style={{background:done?"#F5F5F5":"#fff",border:"1.5px solid "+(done?"#EEE":border),borderRadius:9,padding:"8px 10px",display:"flex",alignItems:"center",gap:7,transition:"all 0.2s"}}>
-                          <span style={{fontSize:18,flexShrink:0}}>{emoji}</span>
-                          <span style={{fontFamily:font,fontWeight:700,fontSize:13,color:done?"#BBB":"#2C2C2C",textDecoration:done?"line-through":"none",flex:1}}>
+                        <div style={{background:done?"#F5F5F5":"#fff", border:"1.5px solid "+(done?"#EEE":border), borderRadius:9, padding:"8px 10px", display:"flex", alignItems:"center", gap:7}}>
+                          <span style={{fontSize:18, flexShrink:0}}>{emoji}</span>
+                          <span style={{fontFamily:font, fontWeight:700, fontSize:13, color:done?"#BBB":"#2C2C2C", textDecoration:done?"line-through":"none", flex:1}}>
                             {task.name}
-                            {task.isSpecial && <span style={{marginLeft:5,fontSize:9,color:orange,fontWeight:800}}>★</span>}
+                            {task.isSpecial && <span style={{marginLeft:5, fontSize:9, color:orange, fontWeight:800}}>★</span>}
                           </span>
-                          <div onClick={function(){mark(task.name,skipped?undefined:false);}}
-                            style={{cursor:"pointer",fontSize:13,color:skipped?orange:"#CCC",flexShrink:0}}>✕</div>
+                          <div onClick={function(){mark(task.name, skipped?undefined:false);}}
+                            style={{cursor:"pointer", fontSize:13, color:skipped?orange:"#CCC", flexShrink:0}}>✕</div>
                         </div>
                       </div>
                     );
@@ -314,6 +333,7 @@ export default function App() {
     );
   }
 
+  // ── WEEKLY VIEW ────────────────────────────────────────────
   function WeeklyView() {
     const sections = SECTIONS.map(function(sec) {
       const tasks = allWeekTasks.filter(function(t) {
@@ -342,7 +362,7 @@ export default function App() {
         {allWeekTasks.length === 0 ? (
           <div style={{textAlign:"center", padding:"80px 24px"}}>
             <div style={{fontFamily:font, fontWeight:800, fontSize:16, color:"#AAA"}}>No schedule yet.</div>
-            <button onClick={function(){setView("chat");}} style={{marginTop:16,padding:"12px 28px",background:orange,color:"#fff",border:"none",borderRadius:12,cursor:"pointer",fontFamily:font,fontWeight:800,fontSize:13}}>Open Chat</button>
+            <button onClick={function(){setView("chat");}} style={{marginTop:16, padding:"12px 28px", background:orange, color:"#fff", border:"none", borderRadius:12, cursor:"pointer", fontFamily:font, fontWeight:800, fontSize:13}}>Open Chat</button>
           </div>
         ) : (
           <div style={{overflowX:"auto", padding:"16px 12px 0"}}>
@@ -351,33 +371,24 @@ export default function App() {
                 return (
                   <tbody key={sec.id}>
                     <tr>
-                      <td style={{background:sec.color,padding:"8px 10px",fontFamily:font,fontWeight:900,fontSize:13,color:sec.text,width:"44%"}}>{sec.label}</td>
+                      <td style={{background:sec.color, padding:"8px 10px", fontFamily:font, fontWeight:900, fontSize:13, color:sec.text, width:"44%"}}>{sec.label}</td>
                       {DAY_COL.map(function(d,i){
-                        return <td key={i} style={{background:sec.color,padding:"8px 0",textAlign:"center",fontFamily:font,fontWeight:900,fontSize:12,color:WEEKDAYS[i]&&WEEKDAYS[i].isToday?orange:sec.text}}>{d}</td>;
+                        return <td key={i} style={{background:sec.color, padding:"8px 0", textAlign:"center", fontFamily:font, fontWeight:900, fontSize:12, color:WEEKDAYS[i]&&WEEKDAYS[i].isToday?orange:sec.text}}>{d}</td>;
                       })}
                     </tr>
                     {sec.tasks.map(function(task,ti){
-                      const emoji = task.emoji || getEmoji(task.name,task.category||"");
+                      const emoji = task.emoji || getEmoji(task.name, task.category||"");
                       return (
                         <tr key={ti} style={{background:ti%2===0?cream:"#FFF8EE"}}>
-                          <td style={{padding:"8px 10px",border:"1px solid #F0E6C0"}}>
-                            <div style={{display:"flex",alignItems:"center",gap:6}}>
+                          <td style={{padding:"8px 10px", border:"1px solid #F0E6C0"}}>
+                            <div style={{display:"flex", alignItems:"center", gap:6}}>
                               <span style={{fontSize:14}}>{emoji}</span>
-                              <span style={{fontFamily:font,fontWeight:700,fontSize:12,color:"#2C2C2C"}}>{ti+1}. {task.name}</span>
+                              <span style={{fontFamily:font, fontWeight:700, fontSize:12, color:"#2C2C2C"}}>{ti+1}. {task.name}</span>
                             </div>
                           </td>
                           {WEEKDAYS.map(function(wd,di){
                             const sched = (schedule[wd.day]||[]).some(function(t){return t.name===task.name;}) || (task.isSpecial&&wd.key===TODAY_KEY);
                             const done  = comps[wd.key]&&comps[wd.key][task.name]===true;
                             return (
-                              <td key={di} onClick={function(){if(wd.isToday)mark(task.name,done?undefined:true);}}
-                                style={{textAlign:"center",padding:"8px 0",border:"1px solid #F0E6C0",cursor:wd.isToday?"pointer":"default",background:wd.isToday?"#FFF3E0":"transparent"}}>
-                                {done ? <span style={{color:orange,fontSize:16,fontWeight:900}}>✓</span>
-                                  : sched ? <div style={{width:12,height:12,background:wd.isToday?"transparent":"#E8D8A0",border:wd.isToday?"2px solid "+border:"none",borderRadius:3,margin:"0 auto"}}/> : null}
-                              </td>
-                            );
-                          })}
-                        </tr>
-                      );
-                    })}
-               
+                              <td key={di} onClick={function(){if(wd.isToday) mark(task.name,done?undefined:true);}}
+                                style={{textAlign:"center", padding:"8px 0", border:"1px sol
