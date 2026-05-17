@@ -391,7 +391,6 @@ export default function App() {
                             const done  = comps[wd.key]&&comps[wd.key][task.name]===true;
                             return (
                               <td key={di} onClick={function(){if(wd.isToday) mark(task.name,done?undefined:true);}}
-                                style={{textAlign:"center", padding:"8px 0", border:"1px sol
                                 style={{textAlign:"center", padding:"8px 0", border:"1px solid #F0E6C0", cursor:wd.isToday?"pointer":"default", background:wd.isToday?"#FFF3E0":"transparent"}}>
                                 {done
                                   ? <span style={{color:orange, fontSize:16, fontWeight:900}}>✓</span>
