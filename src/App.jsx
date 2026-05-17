@@ -392,3 +392,112 @@ export default function App() {
                             return (
                               <td key={di} onClick={function(){if(wd.isToday) mark(task.name,done?undefined:true);}}
                                 style={{textAlign:"center", padding:"8px 0", border:"1px sol
+                                style={{textAlign:"center", padding:"8px 0", border:"1px solid #F0E6C0", cursor:wd.isToday?"pointer":"default", background:wd.isToday?"#FFF3E0":"transparent"}}>
+                                {done
+                                  ? <span style={{color:orange, fontSize:16, fontWeight:900}}>✓</span>
+                                  : sched ? <div style={{width:12, height:12, background:wd.isToday?"transparent":"#E8D8A0", border:wd.isToday?"2px solid "+border:"none", borderRadius:3, margin:"0 auto"}}/> : null}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                );
+              })}
+            </table>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  function ChatView() {
+    return (
+      <div style={{display:"flex", flexDirection:"column", height:"calc(100dvh - 68px)", background:cream}}>
+        <div style={{background:gold, padding:"52px 20px 18px", borderBottom:"2px solid "+border}}>
+          <div style={{display:"flex", alignItems:"center", gap:10}}>
+            <span style={{fontSize:28}}>🤖</span>
+            <div>
+              <div style={{fontFamily:font, fontWeight:900, fontSize:22, color:"#2C2C2C"}}>AI Planner</div>
+              <div style={{fontFamily:font, fontSize:11, color:"#AAA", fontWeight:600}}>Powered by Google Gemini (Free)</div>
+            </div>
+          </div>
+        </div>
+        <div ref={chatRef} style={{flex:1, overflowY:"auto", padding:"18px 16px 150px"}}>
+          {msgs.map(function(m,i){
+            return (
+              <div key={i} style={{display:"flex", justifyContent:m.r==="u"?"flex-end":"flex-start", marginBottom:12}}>
+                {m.r==="ai" && <div style={{width:32, height:32, borderRadius:10, background:"#E8F5E9", border:"2px solid #A5D6A7", display:"flex", alignItems:"center", justifyContent:"center", marginRight:8, flexShrink:0, marginTop:2, fontSize:16}}>✨</div>}
+                <div style={{maxWidth:"78%", padding:"12px 16px", fontFamily:font, fontSize:14, lineHeight:1.7, whiteSpace:"pre-line", background:m.r==="u"?orange:gold, color:m.r==="u"?"#fff":"#2C2C2C", fontWeight:600, borderRadius:m.r==="u"?"18px 18px 4px 18px":"18px 18px 18px 4px", border:m.r==="ai"?"1.5px solid "+border:"none"}}>
+                  {m.t}
+                </div>
+              </div>
+            );
+          })}
+          {loading && (
+            <div style={{display:"flex", alignItems:"center", gap:8}}>
+              <div style={{width:32, height:32, borderRadius:10, background:"#E8F5E9", border:"2px solid #A5D6A7", display:"flex", alignItems:"center", justifyContent:"center", fontSize:16}}>✨</div>
+              <div style={{background:gold, border:"1.5px solid "+border, borderRadius:"18px 18px 18px 4px", padding:"14px 18px", display:"flex", gap:5}}>
+                {[0,1,2].map(function(i){ return <div key={i} style={{width:7, height:7, borderRadius:"50%", background:orange, animation:"bounce 1s "+(i*0.2)+"s infinite"}}/>; })}
+              </div>
+            </div>
+          )}
+        </div>
+        <div style={{position:"fixed", bottom:68, left:"50%", transform:"translateX(-50%)", width:"100%", maxWidth:430, padding:"10px 14px", background:"linear-gradient(0deg,"+cream+" 75%,transparent)", zIndex:10}}>
+          <div style={{display:"flex", gap:8}}>
+            <div style={{flex:1, border:"2px solid "+border, borderRadius:16, background:gold, display:"flex", alignItems:"center", padding:"10px 14px", gap:8}}>
+              <textarea value={input}
+                onChange={function(e){setInput(e.target.value);}}
+                onKeyDown={function(e){if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();send();}}}
+                placeholder="Tell me your routine..."
+                rows={1}
+                style={{flex:1, background:"none", border:"none", outline:"none", fontFamily:font, fontSize:14, resize:"none", color:"#2C2C2C", lineHeight:1.5, fontWeight:600}}/>
+              <button onClick={voice} style={{background:"none", border:"none", cursor:"pointer", fontSize:20, color:listening?"#E76F51":"#DDD", lineHeight:1}}>
+                {listening?"🔴":"🎤"}
+              </button>
+            </div>
+            <button onClick={send} disabled={!input.trim()||loading}
+              style={{width:50, height:50, borderRadius:14, border:"2px solid "+border, cursor:input.trim()?"pointer":"default", background:input.trim()?orange:gold, color:input.trim()?"#fff":"#DDD", fontSize:18, transition:"all 0.2s", display:"flex", alignItems:"center", justifyContent:"center"}}>↑</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const navItems = [
+    {id:"today",  label:"Today",  icon:"☀️"},
+    {id:"weekly", label:"Weekly", icon:"📅"},
+    {id:"chat",   label:"Chat",   icon:"💬"},
+  ];
+
+  return (
+    <>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Nunito:wght@600;700;800;900&display=swap');
+        *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+        body{background:#FFFDF7;-webkit-tap-highlight-color:transparent;overscroll-behavior:none}
+        ::-webkit-scrollbar{display:none}
+        @keyframes bounce{0%,100%{transform:translateY(0)}50%{transform:translateY(-5px)}}
+        td,th{border:1px solid #F0E6C0}
+      `}</style>
+      <div style={{minHeight:"100dvh", background:cream, maxWidth:430, margin:"0 auto", paddingBottom:68}}>
+        {view==="today"  && <TodayView/>}
+        {view==="weekly" && <WeeklyView/>}
+        {view==="chat"   && <ChatView/>}
+        <div style={{position:"fixed", bottom:0, left:"50%", transform:"translateX(-50%)", width:"100%", maxWidth:430, background:gold, borderTop:"2px solid "+border, display:"flex", zIndex:30}}>
+          {navItems.map(function(n){
+            return (
+              <button key={n.id} onClick={function(){setView(n.id);}}
+                style={{flex:1, display:"flex", flexDirection:"column", alignItems:"center", gap:2, padding:"10px 0 12px", color:view===n.id?orange:"#CCCCCC", background:"none", border:"none", cursor:"pointer", fontFamily:font, fontSize:10, fontWeight:800, transition:"color 0.2s", borderTop:view===n.id?"3px solid "+orange:"3px solid transparent"}}>
+                <span style={{fontSize:22}}>{n.icon}</span>
+                <span>{n.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </>
+  );
+              }
+        
